@@ -8,6 +8,7 @@ RUN pip install --no-cache-dir --upgrade pip \
 FROM python:3.11-slim AS runtime
 
 ENV PYTHONUNBUFFERED=1
+# Expected env vars include GOOGLE_API_KEY for Gemini access.
 WORKDIR /app
 
 RUN apt-get update \

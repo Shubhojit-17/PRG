@@ -1,6 +1,6 @@
 # Prompt Regression Guardian
 
-Prompt Regression Guardian checks new prompt versions before they ship. It evaluates candidates against a stable baseline in Phoenix, labels the candidate version, and alerts Slack if quality regresses.
+Prompt Regression Guardian is a Google ADK (Agent Development Kit) service that checks new prompt versions before they ship. It evaluates candidates against a stable baseline in Phoenix, labels the candidate version, and alerts Slack if quality regresses.
 
 ## Contents
 - [Overview](#overview)
@@ -12,6 +12,7 @@ Prompt Regression Guardian checks new prompt versions before they ship. It evalu
 - [Local quickstart](#local-quickstart)
 - [API endpoints](#api-endpoints)
 - [Configuration](#configuration)
+- [Self-introspection loop](#self-introspection-loop)
 - [Deployment to Cloud Run](#deployment-to-cloud-run)
 - [Project layout](#project-layout)
 - [Testing](#testing)
@@ -19,19 +20,19 @@ Prompt Regression Guardian checks new prompt versions before they ship. It evalu
 - [License](#license)
 
 ## Overview
-Prompt Regression Guardian is a FastAPI service that runs prompt regression checks on demand. For each prompt, it runs two Phoenix experiments (baseline and candidate), compares results, annotates the candidate version, and sends Slack alerts if regressions are detected.
+Prompt Regression Guardian is a FastAPI service that runs prompt regression checks on demand using Google ADK. For each prompt, it runs two Phoenix experiments (baseline and candidate), compares results, annotates the candidate version, and sends Slack alerts if regressions are detected.
 
 ## Key features
 - Baseline selection from `baseline_version_id` or the `stable` label.
 - Per-dimension regression detection with a configurable threshold.
 - Verdict labels applied to candidate versions: `stable`, `regression-detected`, `needs-review`.
 - Slack alerts with Phoenix experiment links on failures.
-- Async MCP client using JSON-RPC over stdio via `npx @arizeai/phoenix-mcp`.
-- OpenTelemetry tracing wired to Phoenix and Google GenAI instrumentation.
+- Google ADK agent with REST-based Phoenix tool calls.
+- OpenTelemetry tracing wired to Phoenix with ADK auto-instrumentation.
 
 ## How it works
-1. List prompts and datasets from Phoenix.
-2. For each prompt (up to 3 concurrent), find a baseline version and the latest candidate.
+1. List prompts and datasets from Phoenix via the REST API.
+2. For each prompt, find a baseline version and the latest candidate.
 3. Run Phoenix experiments for baseline and candidate using the configured judge model.
 4. Compare mean scores and dimension deltas, then build a verdict.
 5. Annotate the candidate version with a label and summary.
@@ -40,12 +41,12 @@ Prompt Regression Guardian is a FastAPI service that runs prompt regression chec
 ## Architecture
 ```mermaid
 flowchart LR
-  Scheduler[Cloud Scheduler] -->|HTTP POST /run| Service[Cloud Run: Prompt Regression Guardian]
-  Service -->|JSON-RPC tools/call| MCP[Phoenix MCP Client]
-  MCP --> Phoenix[Arize Phoenix]
+  Scheduler[Cloud Scheduler] -->|HTTP POST /run| Service[Cloud Run: ADK Guardian]
+  Service -->|REST /v1/*| Phoenix[Arize Phoenix]
   Phoenix -->|LLM-as-judge| Judge[Eval Judge Model]
   Service -->|Webhook| Slack[Slack]
   Phoenix <--> Store[(Prompts, Datasets, Experiments)]
+  GeminiCLI[Gemini CLI] -->|MCP| Phoenix
 ```
 
 ## Run sequence
@@ -53,19 +54,16 @@ flowchart LR
 sequenceDiagram
   participant Scheduler
   participant Service as Guardian Service
-  participant MCP as Phoenix MCP
   participant Phoenix
   participant Slack
 
   Scheduler->>Service: POST /run
-  Service->>MCP: list_prompts, list_datasets
-  loop per prompt (max 3)
-    Service->>MCP: get_prompt_version (baseline, candidate)
-    Service->>MCP: run_experiment (baseline)
-    Service->>MCP: run_experiment (candidate)
-    MCP->>Phoenix: Execute experiments
-    Service->>MCP: get_experiment_results
-    Service->>MCP: annotate_prompt_version (label, summary)
+  Service->>Phoenix: GET /v1/prompts, GET /v1/datasets
+  loop per prompt
+    Service->>Phoenix: POST /v1/experiments (baseline)
+    Service->>Phoenix: POST /v1/experiments (candidate)
+    Service->>Phoenix: GET /v1/experiments/{id}
+    Service->>Phoenix: POST prompt version annotation
     alt regression detected
       Service->>Slack: send webhook alert
     end
@@ -74,8 +72,9 @@ sequenceDiagram
 ```
 
 ## Requirements
-- Node 20 (required for the MCP client run via `npx`)
+- Node 20 (for Phoenix MCP via Gemini CLI self-introspection)
 - Python 3.11
+- Google AI Studio API key (`GOOGLE_API_KEY`)
 - Google Cloud SDK (for deployment)
 - Arize Phoenix instance (local or cloud)
 - Slack incoming webhook URL
@@ -104,7 +103,9 @@ python -m phoenix.server.main
 
 python <SEED_SCRIPT>
 
-uvicorn agent.main:app --host 0.0.0.0 --port 8080 --workers 1
+python -m agent.main
+# Or run with the ADK CLI if available:
+# adk run agent/
 python <TRIGGER_SCRIPT>
 ```
 
@@ -121,9 +122,10 @@ Environment values are loaded with Pydantic Settings. The template file is [.env
 | `PHOENIX_HOST` | Phoenix base URL | Yes |
 | `PHOENIX_API_KEY` | Phoenix cloud API key | Optional (required for cloud) |
 | `PHOENIX_PROJECT_NAME` | Phoenix project name | Yes |
-| `GOOGLE_CLOUD_PROJECT` | GCP project ID | Yes |
-| `GOOGLE_CLOUD_REGION` | GCP region for Vertex AI | Yes |
-| `VERTEX_AI_MODEL` | Vertex AI model name | Yes |
+| `GOOGLE_API_KEY` | Google AI Studio API key | Yes |
+| `GOOGLE_CLOUD_PROJECT` | GCP project ID | Optional |
+| `GOOGLE_CLOUD_REGION` | GCP region for Vertex AI | Optional |
+| `VERTEX_AI_MODEL` | Vertex AI model name (Cloud Run only) | Optional |
 | `SLACK_WEBHOOK_URL` | Slack incoming webhook URL | Yes |
 | `SLACK_CHANNEL` | Slack channel label (informational) | Optional |
 | `REGRESSION_THRESHOLD` | Regression threshold (float) | Yes |
@@ -131,6 +133,10 @@ Environment values are loaded with Pydantic Settings. The template file is [.env
 | `POLL_INTERVAL_SECONDS` | Scheduler cadence value (not used by the service) | Yes |
 | `ENV` | Logging mode: `development` or `production` | Optional |
 | `AGENT_URL` | Local trigger URL override used by the trigger script | Optional |
+
+## Self-introspection loop
+Once traces are flowing into Phoenix, open Gemini CLI from the repo root and ask:
+"Show me the last 5 traces in my prompt-guardian project." The Phoenix MCP server in [.gemini/settings.json](.gemini/settings.json) gives the CLI live access to the agent's own operational data.
 
 ## Deployment to Cloud Run
 Cloud Build uses [cloudbuild.yaml](cloudbuild.yaml) and builds the image defined in [Dockerfile](Dockerfile). The build step deploys to Cloud Run and sets environment variables from Secret Manager.
@@ -159,14 +165,15 @@ gcloud scheduler jobs create http prompt-guardian-check \
 ## Project layout
 | Path | Purpose |
 | --- | --- |
-| [agent/](agent/) | FastAPI app, orchestration, MCP client, evaluator, and Slack alerting. |
+| [agent/](agent/) | FastAPI app, ADK agent, REST helpers, and Slack alerting. |
 | [config/](config/) | Settings and environment configuration. |
 | [scripts/](scripts/) | Local seed and trigger utilities. |
-| [tests/](tests/) | Unit tests for the evaluator and MCP client. |
+| [tests/](tests/) | Unit tests for the evaluator and Phoenix REST helpers. |
 | [requirements.txt](requirements.txt) | Python dependencies. |
 | [Dockerfile](Dockerfile) | Container build for Cloud Run. |
 | [cloudbuild.yaml](cloudbuild.yaml) | Cloud Build deployment pipeline. |
 | [PROMPT_NOTES.md](PROMPT_NOTES.md) | Design and hackathon notes. |
+| [.gemini/settings.json](.gemini/settings.json) | Gemini CLI MCP configuration for Phoenix. |
 
 ## Testing
 Command placeholder used below:
@@ -177,9 +184,10 @@ pytest <TEST_PATH> -v
 ```
 
 ## Troubleshooting
-- MCP client requires Node 20 and access to the Phoenix host; verify `PHOENIX_HOST` is reachable.
+- Phoenix REST calls require `PHOENIX_HOST` to be reachable and optional `PHOENIX_API_KEY` for cloud instances.
 - A prompt must have a baseline tagged `stable` (or a `baseline_version_id`) and a dataset with the same name as the prompt.
 - Slack alerts only send on regressions; check webhook configuration if failures do not notify.
+- The Gemini CLI MCP config expects Node 20 and the Phoenix MCP server to be reachable.
 - `GET /status` returns 404 until a run completes.
 
 ## License

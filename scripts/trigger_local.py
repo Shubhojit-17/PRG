@@ -4,11 +4,13 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import json
 import os
 from typing import Any
 
 import httpx
 import structlog
+from dotenv import load_dotenv
 
 DEFAULT_AGENT_URL = "http://localhost:8080/run"
 REQUEST_TIMEOUT_SECONDS = 120
@@ -59,10 +61,12 @@ async def trigger_run(agent_url: str, project_name: str | None) -> dict[str, Any
 async def run() -> None:
     """Run the local trigger script."""
 
+    load_dotenv()
     args = build_parser().parse_args()
     logger.info("triggering_guardian", agent_url=args.agent_url)
     result = await trigger_run(args.agent_url, args.project_name)
     logger.info("guardian_completed", result=result)
+    print(json.dumps(result, indent=2, sort_keys=True))
 
 
 def main() -> None:

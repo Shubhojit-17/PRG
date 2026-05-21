@@ -26,12 +26,12 @@ steps:
       - "540s"
       - "--set-env-vars"
       - >-
-        PHOENIX_HOST=projects/$PROJECT_ID/secrets/PHOENIX_HOST/versions/latest,
+        PHOENIX_HOST=https://app.phoenix.arize.com,
         PHOENIX_API_KEY=projects/$PROJECT_ID/secrets/PHOENIX_API_KEY/versions/latest,
         PHOENIX_PROJECT_NAME=projects/$PROJECT_ID/secrets/PHOENIX_PROJECT_NAME/versions/latest,
+        GOOGLE_API_KEY=projects/$PROJECT_ID/secrets/GOOGLE_API_KEY/versions/latest,
         GOOGLE_CLOUD_PROJECT=projects/$PROJECT_ID/secrets/GOOGLE_CLOUD_PROJECT/versions/latest,
         GOOGLE_CLOUD_REGION=projects/$PROJECT_ID/secrets/GOOGLE_CLOUD_REGION/versions/latest,
-        VERTEX_AI_MODEL=projects/$PROJECT_ID/secrets/VERTEX_AI_MODEL/versions/latest,
         SLACK_WEBHOOK_URL=projects/$PROJECT_ID/secrets/SLACK_WEBHOOK_URL/versions/latest,
         SLACK_CHANNEL=projects/$PROJECT_ID/secrets/SLACK_CHANNEL/versions/latest,
         REGRESSION_THRESHOLD=projects/$PROJECT_ID/secrets/REGRESSION_THRESHOLD/versions/latest,

@@ -3,38 +3,10 @@
 from __future__ import annotations
 
 from datetime import datetime, timezone
-from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
-from agent.mcp_client import PhoenixMCPClient
-from agent.models import EvalScore, ExperimentResult, PromptVersion
-
-
-@pytest.fixture()
-def mock_mcp_client() -> MagicMock:
-    """Return a mocked PhoenixMCPClient with async methods.
-
-    Returns:
-        MagicMock: Mocked MCP client.
-    """
-
-    client = MagicMock(spec=PhoenixMCPClient)
-    client.list_prompts = AsyncMock(return_value=[])
-    client.list_datasets = AsyncMock(return_value=[])
-    client.run_experiment = AsyncMock(return_value="exp-1")
-    client.get_experiment_results = AsyncMock()
-    client.annotate_prompt_version = AsyncMock(return_value=None)
-
-    sample_version = PromptVersion(
-        version_id="v1",
-        prompt_text="prompt",
-        version_tag="v1.0",
-        created_at=datetime.now(timezone.utc),
-        is_baseline=True,
-    )
-    client.get_prompt_version = AsyncMock(return_value=sample_version)
-    return client
+from agent.models import EvalScore, ExperimentResult
 
 
 @pytest.fixture()

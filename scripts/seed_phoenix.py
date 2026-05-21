@@ -1,213 +1,154 @@
-"""Seed Phoenix with demo prompts and datasets for local testing."""
+import sys, os
 
-from __future__ import annotations
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-import asyncio
-from typing import Any
+from dotenv import load_dotenv
 
-import httpx
-import structlog
+load_dotenv()  # load .env FIRST
 
-from config.settings import settings
+api_key = os.environ.get("PHOENIX_API_KEY", "")
+phoenix_host = os.environ.get("PHOENIX_HOST", "https://app.phoenix.arize.com")
 
-PHOENIX_API_PREFIX = "/api"
-PHOENIX_PROJECTS_ENDPOINT = f"{PHOENIX_API_PREFIX}/projects"
-PHOENIX_PROMPTS_ENDPOINT = f"{PHOENIX_API_PREFIX}/prompts"
-PHOENIX_DATASETS_ENDPOINT = f"{PHOENIX_API_PREFIX}/datasets"
-REQUEST_TIMEOUT_SECONDS = 10
-
-PROMPT_NAME = "customer-support-assistant"
-BASELINE_TAG = "v1.0"
-CANDIDATE_TAG = "v1.1"
-BASELINE_LABEL = "stable"
-
-logger = structlog.get_logger()
-
-EXAMPLES = [
-    {
-        "input": "My order has not arrived. What should I do?",
-        "expected_output": "I am sorry your order is delayed. Please check your tracking link for the latest status. If it is past the estimated delivery date, share your order number and I will open a delivery investigation right away.",
-    },
-    {
-        "input": "I was charged twice for the same purchase. Can you fix it?",
-        "expected_output": "Thanks for letting us know. Please send the order number and a screenshot of the charges. We will verify the duplicate and issue a refund within 3 to 5 business days.",
-    },
-    {
-        "input": "The item I received is damaged. How do I get a replacement?",
-        "expected_output": "I am sorry about that. Please share photos of the damage and your order number. We will arrange a replacement or refund, whichever you prefer.",
-    },
-    {
-        "input": "I need to change my shipping address.",
-        "expected_output": "I can help with that. Please provide your order number and the correct shipping address. If the order has not shipped, we will update it immediately.",
-    },
-    {
-        "input": "Can I return a product I bought last week?",
-        "expected_output": "Yes, returns are accepted within 30 days of delivery. Please share your order number and we will send return instructions and a prepaid label.",
-    },
-    {
-        "input": "I canceled my order but still received it. What now?",
-        "expected_output": "I am sorry for the mix-up. Please keep the packaging and let us know if you would like a return pickup or a prepaid label. We will make it right.",
-    },
-    {
-        "input": "The tracking says delivered, but I do not have the package.",
-        "expected_output": "Thanks for checking. Please confirm your address and look for a delivery photo or a notice. If it is still missing, we will open a claim with the carrier and send a replacement if needed.",
-    },
-    {
-        "input": "How long does standard shipping take?",
-        "expected_output": "Standard shipping typically takes 3 to 5 business days after the order ships. You can see the exact estimate at checkout and in your tracking email.",
-    },
-    {
-        "input": "My promo code did not apply. Can you help?",
-        "expected_output": "Absolutely. Please share the promo code and your cart details. I will check eligibility and apply a discount if it should have worked.",
-    },
-    {
-        "input": "I need an invoice for my purchase.",
-        "expected_output": "No problem. Please provide your order number and billing email. I will send a PDF invoice to you shortly.",
-    },
-]
-
-BASELINE_PROMPT = (
-    "You are a customer support assistant for an e-commerce company. Provide clear, "
-    "polite, and professional help. Always acknowledge the customer issue, ask for "
-    "the minimum details needed to resolve it, and explain next steps. If a request "
-    "is outside policy, offer the closest alternative. Keep responses concise, "
-    "actionable, and friendly. Never request sensitive information like passwords or "
-    "full credit card numbers. When appropriate, confirm timelines for refunds, "
-    "shipping, or escalations. Maintain a calm, respectful tone and avoid slang. "
-    "Use short paragraphs and bullet points when helpful so the customer can scan "
-    "the response easily."
+# Verify before proceeding
+print(f"Host: {phoenix_host}")
+print(
+    f"API key present: {bool(api_key)}, starts with: {api_key[:8] if api_key else 'MISSING'}"
 )
 
-CANDIDATE_PROMPT = (
-    "You are a support helper. Try to be friendly and casual. Respond however seems "
-    "right and keep it short. You can be flexible with details and do not worry too "
-    "much about formal steps. The goal is to make the customer feel okay, even if "
-    "the response is not super specific."
-)
+if not api_key:
+    raise ValueError("PHOENIX_API_KEY is not set in .env")
+
+import phoenix as px
+from phoenix.client import Client
+from phoenix.client.types import PromptVersion  # inspect exact import path first
 
 
-def build_headers() -> dict[str, str]:
-    """Build HTTP headers for Phoenix API requests.
-
-    Returns:
-        dict[str, str]: HTTP headers.
-    """
-
-    headers = {"Content-Type": "application/json"}
-    if settings.phoenix.api_key:
-        headers["Authorization"] = f"Bearer {settings.phoenix.api_key}"
-    return headers
-
-
-async def get_or_create_project(client: httpx.AsyncClient) -> str:
-    """Get or create a Phoenix project by name.
-
-    Args:
-        client: Async HTTP client.
-
-    Returns:
-        str: Project identifier.
-    """
-
-    response = await client.get(PHOENIX_PROJECTS_ENDPOINT)
-    response.raise_for_status()
-    projects = response.json()
-    for project in projects:
-        if project.get("name") == settings.phoenix.project_name:
-            return str(project.get("id"))
-
-    create_response = await client.post(
-        PHOENIX_PROJECTS_ENDPOINT,
-        json={"name": settings.phoenix.project_name},
+def seed() -> None:
+    client = Client(
+        base_url=phoenix_host,
+        api_key=api_key,
     )
-    create_response.raise_for_status()
-    return str(create_response.json().get("id"))
 
-
-async def create_prompt_and_versions(client: httpx.AsyncClient, project_id: str) -> str:
-    """Create a prompt and its versions in Phoenix.
-
-    Args:
-        client: Async HTTP client.
-        project_id: Project identifier.
-
-    Returns:
-        str: Prompt identifier.
-    """
-
-    prompt_response = await client.post(
-        PHOENIX_PROMPTS_ENDPOINT,
-        json={"name": PROMPT_NAME, "project_id": project_id},
+    # -- 1. Create baseline prompt (v1.0 - stable, professional) --
+    baseline_version = client.prompts.create(
+        name="customer-support-assistant",
+        prompt_description="Customer support chatbot - baseline stable version",
+        version=PromptVersion(
+            [
+                {
+                    "role": "system",
+                    "content": "You are a customer support assistant for an ecommerce company. Your goal is to resolve customer issues clearly, politely, and efficiently. Always acknowledge the problem, show empathy, and confirm the next step. Ask only for the minimum details needed, such as order number, email used at checkout, and shipping address when relevant. Provide concise guidance for delays, damaged items, returns, refunds, replacements, cancellations, and billing questions. State typical timelines for shipping, refunds, or investigations. If a request is outside policy, explain the policy briefly and offer the closest alternative or escalation path. Never request passwords, full card numbers, or other sensitive credentials. Keep responses short, professional, and easy to scan with short paragraphs or bullets. When information is missing, ask a single clear follow up question. Do not guess order status or promise outcomes you cannot verify.",
+                },
+                {"role": "user", "content": "{{question}}"},
+            ],
+            model_name="gpt-4o-mini",
+            description="Baseline prompt version v1.0",
+            model_provider="OPENAI",
+            template_format="MUSTACHE",
+        ),
     )
-    prompt_response.raise_for_status()
-    prompt_id = str(prompt_response.json().get("id"))
+    print(f"Created baseline prompt version: {baseline_version}")
 
-    baseline_response = await client.post(
-        f"{PHOENIX_PROMPTS_ENDPOINT}/{prompt_id}/versions",
-        json={
-            "prompt_text": BASELINE_PROMPT,
-            "version_tag": BASELINE_TAG,
-            "labels": [BASELINE_LABEL],
+    # -- 2. Tag baseline as stable --
+    client.prompts.tags.create(
+        prompt_version_id=baseline_version.id,
+        name="stable",
+        description="Stable baseline version v1.0",
+    )
+
+    # -- 3. Create degraded prompt (v1.1 - intentionally worse) --
+    candidate_version = client.prompts.create(
+        name="customer-support-assistant",
+        prompt_description="Degraded version - vague and overly casual",
+        version=PromptVersion(
+            [
+                {
+                    "role": "system",
+                    "content": "You are a support helper. Keep things casual and upbeat. Answer in a friendly way without getting into too many details. It is fine to be general and reassure the customer. You do not need to ask for specific information unless it feels important. Skip strict policy talk and avoid long explanations. Keep replies short, informal, and flexible, and try to make the customer feel okay even if the answer is not precise.",
+                },
+                {"role": "user", "content": "{{question}}"},
+            ],
+            model_name="gpt-4o-mini",
+            description="Candidate prompt version v1.1",
+            model_provider="OPENAI",
+            template_format="MUSTACHE",
+        ),
+    )
+    print(f"Created candidate prompt version: {candidate_version}")
+
+    # -- 4. Create evaluation dataset --
+    examples = [
+        {
+            "input": {"question": "My order hasn't arrived, what do I do?"},
+            "output": {
+                "answer": "I'm sorry to hear that. Please check your tracking number for the latest status. If it is past the estimated delivery date, share your order number and I will open a delivery investigation."
+            },
         },
-    )
-    baseline_response.raise_for_status()
-
-    candidate_response = await client.post(
-        f"{PHOENIX_PROMPTS_ENDPOINT}/{prompt_id}/versions",
-        json={
-            "prompt_text": CANDIDATE_PROMPT,
-            "version_tag": CANDIDATE_TAG,
-            "labels": [],
+        {
+            "input": {"question": "I was charged twice for the same purchase. Can you fix it?"},
+            "output": {
+                "answer": "Thanks for letting us know. Please send the order number and a screenshot of the duplicate charges. We will verify and issue a refund within 3 to 5 business days."
+            },
         },
+        {
+            "input": {"question": "The item I received is damaged. How do I get a replacement?"},
+            "output": {
+                "answer": "I'm sorry about that. Please share photos of the damage and your order number. We can ship a replacement or process a refund, whichever you prefer."
+            },
+        },
+        {
+            "input": {"question": "I need to change my shipping address."},
+            "output": {
+                "answer": "I can help. Please provide your order number and the correct address. If the order has not shipped yet, we will update it immediately."
+            },
+        },
+        {
+            "input": {"question": "Can I return a product I bought last week?"},
+            "output": {
+                "answer": "Yes, returns are accepted within 30 days of delivery. Share your order number and we will send return instructions and a prepaid label."
+            },
+        },
+        {
+            "input": {"question": "I canceled my order but it still arrived. What now?"},
+            "output": {
+                "answer": "Sorry for the mix up. Please let us know if you prefer a return pickup or a prepaid label. We will make it right."
+            },
+        },
+        {
+            "input": {"question": "Tracking says delivered, but I do not have the package."},
+            "output": {
+                "answer": "Please confirm your address and check for a delivery photo or notice. If it is still missing, we will open a carrier claim and arrange a replacement if needed."
+            },
+        },
+        {
+            "input": {"question": "How long does standard shipping take?"},
+            "output": {
+                "answer": "Standard shipping usually takes 3 to 5 business days after the order ships. You can see the estimate at checkout and in your tracking email."
+            },
+        },
+        {
+            "input": {"question": "My promo code did not apply. Can you help?"},
+            "output": {
+                "answer": "Absolutely. Share the promo code and your cart details so I can check eligibility and apply a discount if it should have worked."
+            },
+        },
+        {
+            "input": {"question": "I need an invoice for my purchase."},
+            "output": {
+                "answer": "No problem. Please provide your order number and billing email and I will send a PDF invoice."
+            },
+        },
+    ]
+    dataset = client.datasets.create_dataset(
+        name="customer-support-assistant",
+        examples=examples,
+        input_keys=["question"],
+        output_keys=["answer"],
+        dataset_description="Eval dataset for customer support prompt regression testing",
     )
-    candidate_response.raise_for_status()
-
-    return prompt_id
-
-
-async def create_dataset(client: httpx.AsyncClient, project_id: str) -> None:
-    """Create a demo evaluation dataset.
-
-    Args:
-        client: Async HTTP client.
-        project_id: Project identifier.
-    """
-
-    dataset_payload: dict[str, Any] = {
-        "name": PROMPT_NAME,
-        "project_id": project_id,
-        "examples": EXAMPLES,
-    }
-    response = await client.post(PHOENIX_DATASETS_ENDPOINT, json=dataset_payload)
-    response.raise_for_status()
-
-
-async def seed() -> None:
-    """Seed Phoenix with demo data."""
-
-    timeout = httpx.Timeout(REQUEST_TIMEOUT_SECONDS)
-    logger.info(
-        "seeding_phoenix",
-        host=settings.phoenix.host,
-        project=settings.phoenix.project_name,
-    )
-    async with httpx.AsyncClient(
-        base_url=settings.phoenix.host, timeout=timeout, headers=build_headers()
-    ) as client:
-        project_id = await get_or_create_project(client)
-        await create_prompt_and_versions(client, project_id)
-        await create_dataset(client, project_id)
-
-    print(
-        f"Seeded demo data in Phoenix at {settings.phoenix.host}/projects/{project_id}"
-    )
-
-
-def main() -> None:
-    """Entry point for the seed script."""
-
-    asyncio.run(seed())
+    print(f"Created dataset: {dataset}")
+    print("\nSuccess! View your data at: https://app.phoenix.arize.com")
 
 
 if __name__ == "__main__":
-    main()
+    seed()

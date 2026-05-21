@@ -23,7 +23,9 @@ class EnvSettings(BaseSettings):
 class PhoenixSettings(EnvSettings):
     """Settings for Arize Phoenix."""
 
-    host: str = Field(default="http://localhost:6006", validation_alias="PHOENIX_HOST")
+    host: str = Field(
+        default="https://app.phoenix.arize.com", validation_alias="PHOENIX_HOST"
+    )
     api_key: str | None = Field(default=None, validation_alias="PHOENIX_API_KEY")
     project_name: str = Field(
         default="prompt-guardian", validation_alias="PHOENIX_PROJECT_NAME"
@@ -33,9 +35,15 @@ class PhoenixSettings(EnvSettings):
 class GoogleCloudSettings(EnvSettings):
     """Settings for Google Cloud and Vertex AI."""
 
-    project: str = Field(default="local-project", validation_alias="GOOGLE_CLOUD_PROJECT")
-    region: str = Field(default="us-central1", validation_alias="GOOGLE_CLOUD_REGION")
-    model: str = Field(default="gemini-2.0-flash", validation_alias="VERTEX_AI_MODEL")
+    google_api_key: str = Field(default="", validation_alias="GOOGLE_API_KEY")
+    groq_api_key: str = Field(default="", validation_alias="GROQ_API_KEY")
+    project: str = Field(default="", validation_alias="GOOGLE_CLOUD_PROJECT")
+    region: str = Field(default="", validation_alias="GOOGLE_CLOUD_REGION")
+    use_groq: bool = Field(default=False, validation_alias="USE_GROQ")
+    model: str = Field(
+        default="gemini-2.5-flash-lite",
+        validation_alias="VERTEX_AI_MODEL",
+    )
 
 
 class SlackSettings(EnvSettings):
@@ -54,7 +62,8 @@ class AgentSettings(EnvSettings):
         default=0.05, validation_alias="REGRESSION_THRESHOLD"
     )
     eval_judge_model: str = Field(
-        default="gemini-2.0-flash", validation_alias="EVAL_JUDGE_MODEL"
+        default="gemini-2.5-flash",
+        validation_alias="EVAL_JUDGE_MODEL",
     )
     poll_interval_seconds: int = Field(
         default=300, validation_alias="POLL_INTERVAL_SECONDS"
